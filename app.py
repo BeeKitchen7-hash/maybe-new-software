@@ -2,7 +2,7 @@
 import sys
 import os
 import json
-import requests
+import cloudscraper
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -30,30 +30,25 @@ class DownloadWorker(QThread):
             # Créer le dossier de téléchargement
             self.download_dir.mkdir(parents=True, exist_ok=True)
             
-            # Appel API à rbxdl
+            # Appel API à rbxdl avec cloudscraper pour contourner Cloudflare
             api_url = f"https://rbxdl.johnmarctumulak.com/api/download/{self.roblox_id}"
             
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            self.progress_signal.emit("Connexion au serveur (contournement Cloudflare)...")
             
-            self.progress_signal.emit("Connexion au serveur...")
-            response = requests.get(api_url, headers=headers, timeout=30)
+            # Utiliser cloudscraper pour contourner Cloudflare
+            scraper = cloudscraper.create_scraper()
+            response = scraper.get(api_url, timeout=30)
             
             if response.status_code == 200:
                 try:
                     data = response.json()
-                except:
-                    # Si la réponse n'est pas JSON, c'est peut-être un fichier
-                    data = {"file": response.content}
-                
-                # Sauvegarder le fichier ou les données
-                if isinstance(data, dict):
+                    # Sauvegarder les données JSON
                     file_path = self.download_dir / f"{self.roblox_id}_data.json"
                     with open(file_path, 'w') as f:
                         json.dump(data, f, indent=2)
-                    self.progress_signal.emit(f"Fichier téléchargé: {file_path}")
-                else:
+                    self.progress_signal.emit(f"Fichier JSON téléchargé: {file_path}")
+                except Exception as json_err:
+                    # Si ce n'est pas du JSON, c'est un fichier binaire
                     file_path = self.download_dir / f"{self.roblox_id}.rbx"
                     with open(file_path, 'wb') as f:
                         f.write(response.content)
@@ -63,15 +58,21 @@ class DownloadWorker(QThread):
                 downloaded_files = list(self.download_dir.iterdir())
                 self.finished_signal.emit(downloaded_files)
                 
+            elif response.status_code == 404:
+                self.error_signal.emit(f"ID Roblox non trouvé: {self.roblox_id}")
+            elif response.status_code == 403:
+                self.error_signal.emit("Erreur 403: Accès refusé. Le serveur a bloqué la requête.")
             else:
                 self.error_signal.emit(f"Erreur API: Code {response.status_code}")
                 
-        except requests.exceptions.Timeout:
-            self.error_signal.emit("Erreur: Délai d'attente dépassé. Le serveur ne répond pas.")
-        except requests.exceptions.ConnectionError:
-            self.error_signal.emit("Erreur: Impossible de se connecter au serveur.")
         except Exception as e:
-            self.error_signal.emit(f"Erreur: {str(e)}")
+            error_msg = str(e)
+            if "timeout" in error_msg.lower():
+                self.error_signal.emit("Erreur: Délai d'attente dépassé. Le serveur ne répond pas.")
+            elif "connection" in error_msg.lower():
+                self.error_signal.emit("Erreur: Impossible de se connecter au serveur.")
+            else:
+                self.error_signal.emit(f"Erreur: {error_msg}")
 
 
 class RobloxSpoofApp(QMainWindow):
